@@ -107,7 +107,7 @@ async def create_document(request: Request):
 
 
 # ---------------------------------------------------------
-# ENDPOINT 2: GET /clients (NEW)
+# ENDPOINT 2: GET /clients (FIXED)
 # ---------------------------------------------------------
 @app.get("/clients")
 def get_clients():
@@ -131,10 +131,9 @@ def get_clients():
         "timestamp": timestamp
     }
 
-    # Billdu's API might require application/json even on GET requests
-    headers = {"Content-Type": "application/json"}
-    
-    response = requests.get(url, params=params, headers=headers)
+    # FIX: Do not send a Content-Type header for GET requests!
+    # Billdu will crash trying to parse an empty body as JSON.
+    response = requests.get(url, params=params)
 
     try:
         return JSONResponse(status_code=response.status_code, content=response.json())
