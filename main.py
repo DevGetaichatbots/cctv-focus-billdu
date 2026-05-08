@@ -183,6 +183,43 @@ async def create_client(request: Request):
 
 
 # ---------------------------------------------------------
+# ENDPOINT 4: GET /download-pdf/{doc_id}
+# ---------------------------------------------------------
+@app.get("/download-pdf/{doc_id}")
+def download_pdf(doc_id: str):
+    if not BILLDU_API_KEY or not BILLDU_API_SECRET:
+        raise HTTPException(status_code=500, detail="Missing API keys.")
+
+    # Billdu signatures for GET requests usually use an empty payload {}
+    signature, timestamp = generate_signature(BILLDU_API_KEY, BILLDU_API_SECRET, {})
+    
+    # Billdu's exact download URL structure
+    url = f"https://api.billdu.com/documents/{doc_id}/download"
+    
+    params = {
+        "apiKey": BILLDU_API_KEY,
+        "signature": signature,
+        "timestamp": timestamp
+    }
+
+    # We use stream=True because PDFs are binary files
+    response = requests.get(url, params=params, stream=True)
+
+    if response.status_code == 200:
+        from fastapi.responses import Response
+        # Return the raw PDF bytes so n8n recognizes it as a file
+        return Response(
+            content=response.content, 
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=document_{doc_id}.pdf"}
+        )
+    else:
+        try:
+            return JSONResponse(status_code=response.status_code, content=response.json())
+        except:
+            return JSONResponse(status_code=response.status_code, content={"error": "Failed to download PDF", "details": response.text})
+
+# ---------------------------------------------------------
 # HEALTH CHECK
 # ---------------------------------------------------------
 @app.get("/")
