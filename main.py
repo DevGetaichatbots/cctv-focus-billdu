@@ -116,35 +116,10 @@ async def create_client(request: Request):
     # Extract the phone number sent from n8n
     n8n_phone = body.get("phone", "")
 
-    # Build the exact template requested, filling in only John Doe and the phone number
+    # Build a minimal payload to avoid strict validation errors on empty fields
     payload = {
-        "company": "",
         "fullname": "John Doe",
-        "street": "",
-        "street2": "",
-        "zip": "",
-        "city": "",
-        "province": "",
-        "country": "",
-        "shippingCompany": "",
-        "shippingName": "",
-        "shippingSurname": "",
-        "shippingFullname": "",
-        "shippingStreet": "",
-        "shippingStreet2": "",
-        "shippingZip": "",
-        "shippingCity": "",
-        "shippingProvince": "",
-        "shippingCountry": "",
-        "phone": n8n_phone,
-        "mobil": "",
-        "fax": "",
-        "web": "",
-        "note": "",
-        "email": "",
-        "companyId": "",
-        "vatId": "",
-        "taxId": ""
+        "phone": n8n_phone
     }
 
     # Generate the signature for the client payload
