@@ -1,16 +1,9 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.responses import JSONResponse
-import time
-import json
-import hmac
-import hashlib
-import base64
-import requests
-import os
+import time, json, hmac, hashlib, base64, requests, os, re
 
 app = FastAPI(title="Billdu Proxy API")
 
-# Pull secrets from Render environment variables
 BILLDU_API_KEY = os.getenv("BILLDU_API_KEY")
 BILLDU_API_SECRET = os.getenv("BILLDU_API_SECRET")
 
@@ -25,24 +18,68 @@ def php_convert(obj):
 
 def generate_signature(api_key, api_secret, data: dict):
     timestamp = int(time.time())
-
     to_sign = dict(data)
     to_sign['timestamp'] = timestamp
     to_sign['apiKey'] = api_key
-
     sorted_dict = {k: php_convert(to_sign[k]) for k in sorted(to_sign.keys())}
-    json_string = json.dumps(sorted_dict, separators=(',', ':'))
-    json_string = json_string.replace('/', '\\/')
+    json_string = json.dumps(sorted_dict, separators=(',', ':')).replace('/', '\\/')
+    raw_hmac = hmac.new(api_secret.encode('utf-8'), json_string.encode('utf-8'), hashlib.sha512).digest()
+    return base64.b64encode(raw_hmac).decode('utf-8'), timestamp
 
-    raw_hmac = hmac.new(
-        api_secret.encode('utf-8'),
-        json_string.encode('utf-8'),
-        hashlib.sha512
-    ).digest()
+def normalize_phone(phone):
+    """Removes all non-digit characters: +44 123-456 -> 44123456"""
+    if not phone: return ""
+    return re.sub(r'\D', '', str(phone))
 
-    b64_signature = base64.b64encode(raw_hmac).decode('utf-8')
-    return b64_signature, timestamp
+# ---------------------------------------------------------
+# NEW ENDPOINT: GET /search-client?phone=447123456789
+# ---------------------------------------------------------
+@app.get("/search-client")
+def search_client(phone: str = Query(...)):
+    if not BILLDU_API_KEY or not BILLDU_API_SECRET:
+        raise HTTPException(status_code=500, detail="Missing API keys.")
 
+    # Step 1: Call with limit=1 to get the 'total' count
+    sig, ts = generate_signature(BILLDU_API_KEY, BILLDU_API_SECRET, {})
+    base_params = {"apiKey": BILLDU_API_KEY, "signature": sig, "timestamp": ts}
+    
+    first_resp = requests.get("https://api.billdu.com/clients", params={**base_params, "limit": 1})
+    if first_resp.status_code != 200:
+        return JSONResponse(status_code=first_resp.status_code, content=first_resp.json())
+    
+    total_count = first_resp.json().get("total", 10) # Fallback to 10 if missing
+
+    # Step 2: Fetch ALL clients using limit=total
+    # Re-generate signature for the second request
+    sig2, ts2 = generate_signature(BILLDU_API_KEY, BILLDU_API_SECRET, {})
+    full_params = {"apiKey": BILLDU_API_KEY, "signature": sig2, "timestamp": ts2, "limit": total_count}
+    
+    all_resp = requests.get("https://api.billdu.com/clients", params=full_params)
+    all_data = all_resp.json()
+    
+    clients = all_data.get("_embedded", {}).get("items", [])
+    
+    # Step 3: Search and Retrieve
+    target = normalize_phone(phone)
+    matched_client = None
+
+    for client in clients:
+        c_phone = normalize_phone(client.get("phone"))
+        c_mobile = normalize_phone(client.get("mobile"))
+        
+        if (c_phone and c_phone == target) or (c_mobile and c_mobile == target):
+            matched_client = client
+            break
+
+    # Return a clean result for n8n
+    if matched_client:
+        return {
+            "exists": True,
+            "client_id": matched_client["id"],
+            "client_name": matched_client.get("company") or matched_client.get("fullname")
+        }
+    
+    return {"exists": False, "client_id": None}
 
 # ---------------------------------------------------------
 # ENDPOINT 1: POST /create-document (Create Invoices/Estimates)
