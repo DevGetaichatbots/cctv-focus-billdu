@@ -15,9 +15,6 @@ BILLDU_API_KEY = os.getenv("BILLDU_API_KEY")
 BILLDU_API_SECRET = os.getenv("BILLDU_API_SECRET")
 
 def php_convert(obj):
-    """
-    PHP's json_encode converts whole-number floats to ints.
-    """
     if isinstance(obj, float):
         return int(obj) if obj == int(obj) else obj
     elif isinstance(obj, dict):
@@ -29,21 +26,14 @@ def php_convert(obj):
 def generate_signature(api_key, api_secret, data: dict):
     timestamp = int(time.time())
 
-    # 1. Shallow copy of the dictionary
     to_sign = dict(data)
     to_sign['timestamp'] = timestamp
     to_sign['apiKey'] = api_key
 
-    # 2. ksort = sort TOP-LEVEL keys only
     sorted_dict = {k: php_convert(to_sign[k]) for k in sorted(to_sign.keys())}
-    
-    # 3. JSON encode (Python style without spaces)
     json_string = json.dumps(sorted_dict, separators=(',', ':'))
-    
-    # 4. Replicate PHP's default forward-slash escaping
     json_string = json_string.replace('/', '\\/')
 
-    # 5. HMAC-SHA512 (raw), then base64
     raw_hmac = hmac.new(
         api_secret.encode('utf-8'),
         json_string.encode('utf-8'),
@@ -51,20 +41,16 @@ def generate_signature(api_key, api_secret, data: dict):
     ).digest()
 
     b64_signature = base64.b64encode(raw_hmac).decode('utf-8')
-    
     return b64_signature, timestamp
 
 
 # ---------------------------------------------------------
-# ENDPOINT 1: POST /create-document
+# ENDPOINT 1: POST /create-document (Create Invoices/Estimates)
 # ---------------------------------------------------------
 @app.post("/create-document")
 async def create_document(request: Request):
     if not BILLDU_API_KEY or not BILLDU_API_SECRET:
-        raise HTTPException(
-            status_code=500, 
-            detail="Server configuration error: API keys are missing in environment variables."
-        )
+        raise HTTPException(status_code=500, detail="Missing API keys in environment.")
 
     try:
         body = await request.json()
@@ -74,55 +60,98 @@ async def create_document(request: Request):
     doc_type = body.get("type", "estimates")
     payload = body.get("payload")
 
-    if payload is None or not isinstance(payload, dict):
-        raise HTTPException(
-            status_code=400, 
-            detail="Missing or invalid 'payload' object in request body."
-        )
+    if not payload or not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Missing 'payload' dictionary.")
 
-    # Generate signature with the payload
     signature, timestamp = generate_signature(BILLDU_API_KEY, BILLDU_API_SECRET, payload)
     
     url = "https://api.billdu.com/documents"
-    params = {
-        "type": doc_type,
-        "apiKey": BILLDU_API_KEY,
-        "signature": signature,
-        "timestamp": timestamp
-    }
+    params = {"type": doc_type, "apiKey": BILLDU_API_KEY, "signature": signature, "timestamp": timestamp}
 
-    clean_data = php_convert(payload)
-    json_body = json.dumps(clean_data, separators=(',', ':'))
-
+    json_body = json.dumps(php_convert(payload), separators=(',', ':'))
     headers = {"Content-Type": "application/json"}
+    
     response = requests.post(url, data=json_body, params=params, headers=headers)
 
     try:
         return JSONResponse(status_code=response.status_code, content=response.json())
     except ValueError:
-        return JSONResponse(
-            status_code=response.status_code, 
-            content={"error": "Non-JSON response from Billdu", "raw_text": response.text}
-        )
+        return JSONResponse(status_code=response.status_code, content={"error": "Non-JSON response", "raw_text": response.text})
 
 
 # ---------------------------------------------------------
-# ENDPOINT 2: GET /clients (FIXED)
+# ENDPOINT 2: GET /clients (Fetch all clients)
 # ---------------------------------------------------------
 @app.get("/clients")
 def get_clients():
     if not BILLDU_API_KEY or not BILLDU_API_SECRET:
-        raise HTTPException(
-            status_code=500, 
-            detail="Server configuration error: API keys are missing in environment variables."
-        )
+        raise HTTPException(status_code=500, detail="Missing API keys in environment.")
 
-    # For a GET request, the data payload is an empty dictionary
-    empty_payload = {}
+    signature, timestamp = generate_signature(BILLDU_API_KEY, BILLDU_API_SECRET, {})
     
-    # Generate signature using the empty payload
-    signature, timestamp = generate_signature(BILLDU_API_KEY, BILLDU_API_SECRET, empty_payload)
+    url = "https://api.billdu.com/clients"
+    params = {"apiKey": BILLDU_API_KEY, "signature": signature, "timestamp": timestamp}
     
+    response = requests.get(url, params=params) # NO headers here to avoid Nette Syntax Error!
+
+    try:
+        return JSONResponse(status_code=response.status_code, content=response.json())
+    except ValueError:
+        return JSONResponse(status_code=response.status_code, content={"error": "Non-JSON response", "raw_text": response.text})
+
+
+# ---------------------------------------------------------
+# ENDPOINT 3: POST /create-client (NEW)
+# ---------------------------------------------------------
+@app.post("/create-client")
+async def create_client(request: Request):
+    if not BILLDU_API_KEY or not BILLDU_API_SECRET:
+        raise HTTPException(status_code=500, detail="Missing API keys in environment.")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    
+    # Extract the phone number sent from n8n
+    n8n_phone = body.get("phone", "")
+
+    # Build the exact template requested, filling in only John Doe and the phone number
+    payload = {
+        "company": "",
+        "fullname": "John Doe",
+        "street": "",
+        "street2": "",
+        "zip": "",
+        "city": "",
+        "province": "",
+        "country": "",
+        "shippingCompany": "",
+        "shippingName": "",
+        "shippingSurname": "",
+        "shippingFullname": "",
+        "shippingStreet": "",
+        "shippingStreet2": "",
+        "shippingZip": "",
+        "shippingCity": "",
+        "shippingProvince": "",
+        "shippingCountry": "",
+        "phone": n8n_phone,
+        "mobil": "",
+        "fax": "",
+        "web": "",
+        "note": "",
+        "email": "",
+        "companyId": "",
+        "vatId": "",
+        "taxId": ""
+    }
+
+    # Generate the signature for the client payload
+    signature, timestamp = generate_signature(BILLDU_API_KEY, BILLDU_API_SECRET, payload)
+    
+    # Note: Using the real production API URL. If you truly meant to test against 
+    # the apiary-mock URL you posted, swap this line out!
     url = "https://api.billdu.com/clients"
     
     params = {
@@ -131,17 +160,16 @@ def get_clients():
         "timestamp": timestamp
     }
 
-    # FIX: Do not send a Content-Type header for GET requests!
-    # Billdu will crash trying to parse an empty body as JSON.
-    response = requests.get(url, params=params)
+    clean_data = php_convert(payload)
+    json_body = json.dumps(clean_data, separators=(',', ':'))
+    headers = {"Content-Type": "application/json"}
+    
+    response = requests.post(url, data=json_body, params=params, headers=headers)
 
     try:
         return JSONResponse(status_code=response.status_code, content=response.json())
     except ValueError:
-        return JSONResponse(
-            status_code=response.status_code, 
-            content={"error": "Non-JSON response from Billdu", "raw_text": response.text}
-        )
+        return JSONResponse(status_code=response.status_code, content={"error": "Non-JSON response", "raw_text": response.text})
 
 
 # ---------------------------------------------------------
