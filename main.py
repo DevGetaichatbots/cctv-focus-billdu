@@ -81,39 +81,48 @@ def search_client(phone: str = Query(...)):
     
     return {"exists": False, "client_id": None}
 
-# ---------------------------------------------------------
-# ENDPOINT 1: POST /create-document (Create Invoices/Estimates)
-# ---------------------------------------------------------
 @app.post("/create-document")
 async def create_document(request: Request):
     if not BILLDU_API_KEY or not BILLDU_API_SECRET:
-        raise HTTPException(status_code=500, detail="Missing API keys in environment.")
+        raise HTTPException(status_code=500, detail="Missing API keys.")
 
     try:
-        body = await request.json()
+        raw_body = await request.json()
+        
+        # FIX: If n8n sends an array [ {...} ], take the first item
+        if isinstance(raw_body, list) and len(raw_body) > 0:
+            full_body = raw_body[0]
+        else:
+            full_body = raw_body
+            
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON body")
     
-    doc_type = body.get("type", "estimates")
-    payload = body.get("payload")
-
-    if not payload or not isinstance(payload, dict):
-        raise HTTPException(status_code=400, detail="Missing 'payload' dictionary.")
-
-    signature, timestamp = generate_signature(BILLDU_API_KEY, BILLDU_API_SECRET, payload)
+    # 1. Generate signature using the unwrapped Object
+    signature, timestamp = generate_signature(BILLDU_API_KEY, BILLDU_API_SECRET, full_body)
+    
+    doc_type = full_body.get("type", "estimates")
     
     url = "https://api.billdu.com/documents"
-    params = {"type": doc_type, "apiKey": BILLDU_API_KEY, "signature": signature, "timestamp": timestamp}
+    params = {
+        "type": doc_type,
+        "apiKey": BILLDU_API_KEY,
+        "signature": signature,
+        "timestamp": timestamp
+    }
 
-    json_body = json.dumps(php_convert(payload), separators=(',', ':'))
-    headers = {"Content-Type": "application/json"}
+    # 2. Convert and Send the unwrapped Object
+    clean_data = php_convert(full_body)
+    json_body = json.dumps(clean_data, separators=(',', ':'))
+
+    headers = {
+        "Content-Type": "application/json",
+        "Cookie": "session=bbc1985f56d1ce272760ff7203c413d2; _nss=1"
+    }
     
     response = requests.post(url, data=json_body, params=params, headers=headers)
 
-    try:
-        return JSONResponse(status_code=response.status_code, content=response.json())
-    except ValueError:
-        return JSONResponse(status_code=response.status_code, content={"error": "Non-JSON response", "raw_text": response.text})
+    return JSONResponse(status_code=response.status_code, content=response.json())
 
 
 # ---------------------------------------------------------
