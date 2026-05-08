@@ -101,7 +101,7 @@ def get_clients():
 
 
 # ---------------------------------------------------------
-# ENDPOINT 3: POST /create-client (NEW)
+# ENDPOINT 3: POST /create-client (DYNAMIC & FIXED)
 # ---------------------------------------------------------
 @app.post("/create-client")
 async def create_client(request: Request):
@@ -109,24 +109,22 @@ async def create_client(request: Request):
         raise HTTPException(status_code=500, detail="Missing API keys in environment.")
 
     try:
-        body = await request.json()
+        # We take the ENTIRE body sent from n8n
+        payload = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON body")
     
-    # Extract the phone number sent from n8n
-    n8n_phone = body.get("phone", "")
+    # 1. Force the phone number to be a string just in case n8n sends an integer
+    if "phone" in payload:
+        payload["phone"] = str(payload["phone"])
 
-    # Build a minimal payload to avoid strict validation errors on empty fields
-    payload = {
-        "fullname": "John Doe",
-        "phone": n8n_phone
-    }
+    # 2. Billdu requires at least a name or company. If n8n didn't send one, add a fallback.
+    if "fullname" not in payload and "company" not in payload:
+        payload["fullname"] = "John Doe"
 
-    # Generate the signature for the client payload
+    # 3. Generate the signature using EXACTLY what n8n sent
     signature, timestamp = generate_signature(BILLDU_API_KEY, BILLDU_API_SECRET, payload)
     
-    # Note: Using the real production API URL. If you truly meant to test against 
-    # the apiary-mock URL you posted, swap this line out!
     url = "https://api.billdu.com/clients"
     
     params = {
